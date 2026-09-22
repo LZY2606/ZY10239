@@ -109,10 +109,10 @@
 use core::cell::Cell;
 use core::ptr;
 use core::sync::atomic::Ordering::*;
-use core::sync::atomic::{AtomicPtr, AtomicUsize};
 
 use super::Debt;
 use crate::RefCnt;
+use crate::sync::{AtomicPtr, AtomicUsize};
 
 pub const REPLACEMENT_TAG: usize = 0b01;
 pub const GEN_TAG: usize = 0b10;
@@ -280,6 +280,8 @@ impl Slots {
                         .compare_exchange(control, space_addr, SeqCst, SeqCst)
                     {
                         Ok(_) => {
+                            #[cfg(feature = "internal-test-hooks")]
+                            super::stats::bump(&super::stats::HELPED);
                             // We have successfully sent our replacement out (Release) and got
                             // their space in return (Acquire on that load above).
                             self.space_offer.store(their_space, SeqCst);
@@ -302,7 +304,7 @@ impl Slots {
     }
 
     pub(super) fn init(&mut self) {
-        *self.space_offer.get_mut() = &mut self.handover;
+        crate::sync::ptr_set_mut(&mut self.space_offer, &mut self.handover);
     }
 
     pub(super) fn confirm(&self, gen: usize, ptr: usize) -> Result<(), usize> {

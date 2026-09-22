@@ -147,6 +147,10 @@ mod ref_cnt;
 #[cfg(feature = "serde")]
 mod serde;
 pub mod strategy;
+mod sync;
+#[cfg(feature = "internal-test-hooks")]
+#[doc(hidden)]
+pub mod test_hooks;
 #[cfg(feature = "weak")]
 mod weak;
 
@@ -166,9 +170,8 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ops::Deref;
 use core::ptr;
-use core::sync::atomic::{AtomicPtr, Ordering};
-
 use crate::imports::Arc;
+use crate::sync::{AtomicPtr, Ordering};
 
 use crate::access::{Access, Map};
 pub use crate::as_raw::AsRaw;
@@ -344,7 +347,7 @@ impl<T: RefCnt, S: Default + Strategy<T>> From<T> for ArcSwapAny<T, S> {
 
 impl<T: RefCnt, S: Strategy<T>> Drop for ArcSwapAny<T, S> {
     fn drop(&mut self) {
-        let ptr = *self.ptr.get_mut();
+        let ptr = crate::sync::ptr_get_mut(&mut self.ptr);
         unsafe {
             // To pay any possible debts
             self.strategy.wait_for_readers(ptr, &self.ptr);
@@ -405,7 +408,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
 
     /// Extracts the value inside.
     pub fn into_inner(mut self) -> T {
-        let ptr = *self.ptr.get_mut();
+        let ptr = crate::sync::ptr_get_mut(&mut self.ptr);
         // To pay all the debts
         unsafe { self.strategy.wait_for_readers(ptr, &self.ptr) };
         mem::forget(self);
@@ -790,7 +793,29 @@ impl<T> ArcSwapOption<T> {
     /// GLOBAL_DATA.store(Some(Arc::new(42)));
     /// assert_eq!(42, **GLOBAL_DATA.load().as_ref().unwrap());
     /// ```
+    #[cfg(not(loom))]
     pub const fn const_empty() -> Self {
+        Self {
+            ptr: AtomicPtr::new(ptr::null_mut()),
+            _phantom_arc: PhantomData,
+            strategy: HybridStrategy {
+                _config: DefaultConfig,
+            },
+        }
+    }
+
+    /// A const-fn equivalent of [empty].
+    ///
+    /// Just like [empty], this creates an `None`-holding `ArcSwapOption`. The [empty] is, however,
+    /// more general ‒ this is available only for the default strategy, while [empty] is for any
+    /// [Default]-constructible strategy (current or future one).
+    ///
+    /// This variant exists for `--cfg loom` test builds only, where the checked atomics cannot be
+    /// constructed in a const context; it is otherwise identical to the const version.
+    ///
+    /// [empty]: ArcSwapAny::empty
+    #[cfg(loom)]
+    pub fn const_empty() -> Self {
         Self {
             ptr: AtomicPtr::new(ptr::null_mut()),
             _phantom_arc: PhantomData,

@@ -17,12 +17,12 @@ use core::borrow::Borrow;
 use core::mem::{self, ManuallyDrop};
 use core::ops::Deref;
 use core::ptr;
-use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::*;
 
 use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::debt::{Debt, LocalNode};
 use crate::ref_cnt::RefCnt;
+use crate::sync::AtomicPtr;
 
 pub struct HybridProtection<T: RefCnt> {
     debt: Option<&'static Debt>,
@@ -69,6 +69,8 @@ impl<T: RefCnt> HybridProtection<T> {
 
     /// Get a debt slot using the slower but always successful mechanism.
     fn fallback(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Self {
+        #[cfg(feature = "internal-test-hooks")]
+        crate::debt::stats::bump(&crate::debt::stats::HELPING_USED);
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
         let gen = node.new_helping(storage as *const _ as usize);

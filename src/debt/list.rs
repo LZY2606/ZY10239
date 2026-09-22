@@ -30,12 +30,12 @@ use core::cell::Cell;
 use core::ptr;
 use core::slice::Iter;
 use core::sync::atomic::Ordering::*;
-use core::sync::atomic::{AtomicPtr, AtomicUsize};
 
 #[cfg(feature = "experimental-thread-local")]
 use core::cell::OnceCell;
 
 use crate::imports::Box;
+use crate::sync::{AtomicPtr, AtomicUsize};
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
 use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};
@@ -47,7 +47,17 @@ const NODE_USED: usize = 1;
 const NODE_COOLDOWN: usize = 2;
 
 /// The head of the debt linked list.
+#[cfg(not(loom))]
 static LIST_HEAD: AtomicPtr<Node> = AtomicPtr::new(ptr::null_mut());
+
+// Under `--cfg loom` the head has to be re-initialised for every permutation
+// loom runs, so a plain static doesn't work; loom's lazy_static takes care of
+// the per-iteration reset. The leaked nodes of previous iterations simply
+// become unreachable.
+#[cfg(loom)]
+loom::lazy_static! {
+    static ref LIST_HEAD: AtomicPtr<Node> = AtomicPtr::new(ptr::null_mut());
+}
 
 pub struct NodeReservation<'a>(&'a Node);
 
@@ -219,7 +229,7 @@ pub(crate) struct LocalNode {
 }
 
 impl LocalNode {
-    #[cfg(not(feature = "experimental-thread-local"))]
+    #[cfg(any(not(feature = "experimental-thread-local"), loom))]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         let f = Cell::new(Some(f));
         THREAD_HEAD
@@ -248,7 +258,7 @@ impl LocalNode {
             })
     }
 
-    #[cfg(feature = "experimental-thread-local")]
+    #[cfg(all(feature = "experimental-thread-local", not(loom)))]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         let thread_head = THREAD_HEAD.get_or_init(|| LocalNode {
             node: Cell::new(None),
@@ -332,7 +342,7 @@ impl Drop for LocalNode {
     }
 }
 
-#[cfg(not(feature = "experimental-thread-local"))]
+#[cfg(all(not(feature = "experimental-thread-local"), not(loom)))]
 thread_local! {
     /// A debt node assigned to this thread.
     static THREAD_HEAD: LocalNode = LocalNode {
@@ -342,7 +352,20 @@ thread_local! {
     };
 }
 
-#[cfg(feature = "experimental-thread-local")]
+// Loom models need thread locals that are reset for every permutation.
+// loom's LocalKey provides the same `try_with` interface as the standard
+// one, so the rest of the code is shared.
+#[cfg(loom)]
+loom::thread_local! {
+    /// A debt node assigned to this thread.
+    static THREAD_HEAD: LocalNode = LocalNode {
+        node: Cell::new(None),
+        fast: FastLocal::default(),
+        helping: HelpingLocal::default(),
+    };
+}
+
+#[cfg(all(feature = "experimental-thread-local", not(loom)))]
 #[thread_local]
 /// A debt node assigned to this thread.
 static THREAD_HEAD: OnceCell<LocalNode> = OnceCell::new();

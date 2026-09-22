@@ -24,9 +24,10 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{ArcSwap, ArcSwapAny, ArcSwapOption, RefCnt};
+    use alloc::string::{String, ToString};
+    use alloc::sync::Arc;
     use serde_derive::{Deserialize, Serialize};
     use serde_test::{assert_tokens, Token};
-    use std::sync::Arc;
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(transparent)]

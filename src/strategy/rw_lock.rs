@@ -1,10 +1,11 @@
-use core::sync::atomic::{AtomicPtr, Ordering};
-
 use std::sync::RwLock;
+
+use core::sync::atomic::Ordering;
 
 use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::as_raw::AsRaw;
 use crate::ref_cnt::RefCnt;
+use crate::sync::AtomicPtr;
 
 impl<T: RefCnt> Protected<T> for T {
     #[inline]

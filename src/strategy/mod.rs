@@ -37,19 +37,16 @@
 //! [`load`]: crate::ArcSwapAny::load
 
 use core::borrow::Borrow;
-use core::sync::atomic::AtomicPtr;
 
 use crate::ref_cnt::RefCnt;
+use crate::sync::AtomicPtr;
 
 pub(crate) mod hybrid;
 
-#[cfg(all(
-    feature = "internal-test-strategies",
-    feature = "experimental-thread-local"
-))]
-compile_error!("experimental-thread-local is incompatible with internal-test-strategies as it enables #[no_std]");
-
-#[cfg(feature = "internal-test-strategies")]
+// The RwLock-based strategy needs std, therefore it is not available in the
+// no_std configuration of experimental-thread-local. The rest of the internal
+// test strategies works in both.
+#[cfg(all(feature = "internal-test-strategies", not(feature = "experimental-thread-local")))]
 mod rw_lock;
 // Do not use from outside of the crate.
 #[cfg(feature = "internal-test-strategies")]

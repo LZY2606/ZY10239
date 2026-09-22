@@ -14,15 +14,80 @@
 //! Each node has some fast (but fallible) nodes and a fallback node, with different algorithms to
 //! claim them (see the relevant submodules).
 
-use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering::*;
 
 pub(crate) use self::list::{LocalNode, Node};
 use super::RefCnt;
+use crate::sync::AtomicUsize;
 
-mod fast;
+pub(crate) mod fast;
 mod helping;
 mod list;
+
+/// Test-only instrumentation of the debt machinery.
+///
+/// This exists only with the `internal-test-hooks` feature. It provides
+/// relaxed-atomic counters of interesting events (so tests can prove the
+/// fast path, slot exhaustion, fallback and writer-side `pay_all` were all
+/// really exercised) and a knob to artificially shrink the fast slot pool.
+///
+/// Without the feature, not a single instruction of this is compiled in and
+/// no layouts change.
+#[cfg(feature = "internal-test-hooks")]
+pub(crate) mod stats {
+    use core::sync::atomic::AtomicUsize;
+    use core::sync::atomic::Ordering::Relaxed;
+
+    /// A debt was successfully placed into a fast slot.
+    pub(crate) static FAST_ACQUIRED: AtomicUsize = AtomicUsize::new(0);
+    /// The fast slot pool was exhausted (or shrunk to nothing) on a load attempt.
+    pub(crate) static FAST_EXHAUSTED: AtomicUsize = AtomicUsize::new(0);
+    /// The slower helping/fallback strategy was used for a load.
+    pub(crate) static HELPING_USED: AtomicUsize = AtomicUsize::new(0);
+    /// A writer offered a replacement pointer to a colliding reader.
+    pub(crate) static HELPED: AtomicUsize = AtomicUsize::new(0);
+    /// A writer performed a `pay_all` sweep over the debt nodes.
+    pub(crate) static PAY_ALL: AtomicUsize = AtomicUsize::new(0);
+    /// A writer paid an individual debt.
+    pub(crate) static DEBTS_PAID: AtomicUsize = AtomicUsize::new(0);
+    /// Artificial limit on the number of usable fast slots (test hook).
+    static SLOT_LIMIT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+    pub(crate) fn bump(counter: &'static AtomicUsize) {
+        counter.fetch_add(1, Relaxed);
+    }
+
+    pub(crate) fn slot_limit() -> usize {
+        SLOT_LIMIT.load(Relaxed)
+    }
+
+    /// Sets the artificial fast slot limit. `usize::MAX` disables the limit.
+    pub(crate) fn set_slot_limit(limit: usize) {
+        SLOT_LIMIT.store(limit, Relaxed);
+    }
+
+    /// Reads all the counters at once.
+    pub(crate) fn snapshot() -> [usize; 6] {
+        [
+            FAST_ACQUIRED.load(Relaxed),
+            FAST_EXHAUSTED.load(Relaxed),
+            HELPING_USED.load(Relaxed),
+            HELPED.load(Relaxed),
+            PAY_ALL.load(Relaxed),
+            DEBTS_PAID.load(Relaxed),
+        ]
+    }
+
+    /// Resets all the counters (not the slot limit).
+    pub(crate) fn reset() {
+        FAST_ACQUIRED.store(0, Relaxed);
+        FAST_EXHAUSTED.store(0, Relaxed);
+        HELPING_USED.store(0, Relaxed);
+        HELPED.store(0, Relaxed);
+        PAY_ALL.store(0, Relaxed);
+        DEBTS_PAID.store(0, Relaxed);
+    }
+}
 
 /// One debt slot.
 ///
@@ -63,7 +128,8 @@ impl Debt {
     ///   through `ArcSwap<T>` and someone else with `ArcSwapOption<T>` will work.
     #[inline]
     pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
-        self.0
+        let paid = self
+            .0
             // On failure, we have observed that the debt has been paid, but we need to establish a
             // happens-before relationship with that debt being paid before we do anything that
             // relies on the Arc's strong counter being incremented, so we need to Acquire.
@@ -74,7 +140,12 @@ impl Debt {
             //
             // Unfortunately, we need SeqCst on the success
             .compare_exchange(ptr as usize, Self::NONE, SeqCst, SeqCst)
-            .is_ok()
+            .is_ok();
+        #[cfg(feature = "internal-test-hooks")]
+        if paid {
+            stats::bump(&stats::DEBTS_PAID);
+        }
+        paid
     }
 
     /// Pays all the debts on the given pointer and the storage.
@@ -83,6 +154,8 @@ impl Debt {
         T: RefCnt,
         R: Fn() -> T,
     {
+        #[cfg(feature = "internal-test-hooks")]
+        stats::bump(&stats::PAY_ALL);
         LocalNode::with(|local| {
             let val = unsafe { T::from_ptr(ptr) };
             // Pre-pay one ref count that can be safely put into a debt slot to pay it.

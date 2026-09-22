@@ -19,6 +19,11 @@ maintenance = { status = "actively-developed" }
 weak = []
 # Some strategies used for testing few internal cornercases. *DO NOT USE* (no stability guarantees and their performance is likely very bad).
 internal-test-strategies = []
+# Counters and knobs to observe & steer the internal debt machinery from tests
+# (fast-slot hits, slot exhaustion, fallback, writer pay_all). *DO NOT USE* in
+# production, no stability guarantees. Adds a few relaxed atomic counters to the
+# read/write paths, but does not change any public type layout or behaviour.
+internal-test-hooks = []
 # Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
 experimental-strategies = []
 # Use the nightly "thread_local" feature, to allow no_std builds. No stability
@@ -46,6 +51,15 @@ debug = true
 
 [package.metadata.docs.rs]
 features = ["serde", "weak"]
+
+# The loom permutation tests (tests/loom.rs) are compiled only when building
+# with `--cfg loom`; the library then uses loom's checked atomics through a
+# thin internal shim (src/sync.rs) so the exact same algorithm is enumerated.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ["cfg(loom)", "cfg(miri)"] }
 
 [[bench]]
 name = "background"

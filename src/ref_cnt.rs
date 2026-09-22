@@ -126,6 +126,41 @@ unsafe impl<T> RefCnt for Arc<T> {
     }
 }
 
+/// Implementation for loom's checked [`Arc`][loom::sync::Arc].
+///
+/// This exists only in `--cfg loom` builds (the permutation tests in
+/// `tests/loom.rs`). Loom needs all shared state inside a model to use its
+/// own checked types; mixing loom's atomics with real `Arc`s would make the
+/// enumerated executions meaningless. The implementation mirrors the one for
+/// the standard `Arc` above, so the algorithm sees the exact same behaviour.
+#[cfg(loom)]
+unsafe impl<T> RefCnt for loom::sync::Arc<T> {
+    type Base = T;
+    fn into_ptr(me: loom::sync::Arc<T>) -> *mut T {
+        loom::sync::Arc::into_raw(me) as *mut T
+    }
+    fn as_ptr(me: &loom::sync::Arc<T>) -> *mut T {
+        loom::sync::Arc::as_ptr(me) as *mut T
+    }
+    unsafe fn from_ptr(ptr: *const T) -> loom::sync::Arc<T> {
+        let ptr_usize = ptr as usize;
+        let result = std::panic::catch_unwind(move || {
+            loom::sync::Arc::from_raw(ptr_usize as *const T)
+        });
+        match result {
+            Ok(arc) => arc,
+            Err(e) => {
+                eprintln!(
+                    "DEBUG from_ptr({:#x}) failed on thread {:?}",
+                    ptr_usize,
+                    std::thread::current().id()
+                );
+                std::panic::resume_unwind(e);
+            }
+        }
+    }
+}
+
 unsafe impl<T> RefCnt for Rc<T> {
     type Base = T;
     fn into_ptr(me: Rc<T>) -> *mut T {

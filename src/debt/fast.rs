@@ -20,7 +20,13 @@ use core::sync::atomic::Ordering::*;
 
 use super::Debt;
 
-const DEBT_SLOT_CNT: usize = 8;
+// Under `--cfg loom` (permutation tests only) we shrink the pool. This both
+// keeps the state space loom has to enumerate tractable and forces the
+// exhaustion/fallback paths to happen inside the small models.
+#[cfg(not(loom))]
+pub(crate) const DEBT_SLOT_CNT: usize = 8;
+#[cfg(loom)]
+pub(crate) const DEBT_SLOT_CNT: usize = 2;
 
 /// Thread-local information for the [`Slots`]
 #[derive(Default)]
@@ -46,6 +52,15 @@ impl Slots {
         // instead of going through the list of already held ones.
         let offset = local.offset.get();
         let len = self.0.len();
+        // Test hook: artificially shrink the usable part of the pool to force
+        // the exhaustion/fallback paths. Compiled out without the feature.
+        #[cfg(feature = "internal-test-hooks")]
+        let len = len.min(super::stats::slot_limit());
+        #[cfg(feature = "internal-test-hooks")]
+        if len == 0 {
+            super::stats::bump(&super::stats::FAST_EXHAUSTED);
+            return None;
+        }
         for i in 0..len {
             let i = (i + offset) % len;
             // Note: the indexing check is almost certainly optimised out because the len
@@ -58,9 +73,13 @@ impl Slots {
                 let old = slot.0.swap(ptr, SeqCst);
                 debug_assert_eq!(Debt::NONE, old);
                 local.offset.set(i + 1);
+                #[cfg(feature = "internal-test-hooks")]
+                super::stats::bump(&super::stats::FAST_ACQUIRED);
                 return Some(&self.0[i]);
             }
         }
+        #[cfg(feature = "internal-test-hooks")]
+        super::stats::bump(&super::stats::FAST_EXHAUSTED);
         None
     }
 }
