@@ -16,11 +16,26 @@
 
 use core::cell::Cell;
 use core::slice::Iter;
-use core::sync::atomic::Ordering::*;
 
 use super::Debt;
+use crate::atomics::Ordering::*;
 
+// The test hooks shrink the slot pool to a single slot, so tests (and loom
+// models with their bounded state space) can deterministically reach slot
+// exhaustion and the fallback path. Only the `internal-test-hooks` build is
+// affected; the production default stays 8.
+#[cfg(feature = "internal-test-hooks")]
+const DEBT_SLOT_CNT: usize = 1;
+#[cfg(not(feature = "internal-test-hooks"))]
 const DEBT_SLOT_CNT: usize = 8;
+
+/// The number of fast debt slots in each node.
+///
+/// Exposed to the crate's integration tests through the test hooks.
+#[cfg(feature = "internal-test-hooks")]
+pub(crate) fn slot_count() -> usize {
+    DEBT_SLOT_CNT
+}
 
 /// Thread-local information for the [`Slots`]
 #[derive(Default)]
@@ -58,9 +73,11 @@ impl Slots {
                 let old = slot.0.swap(ptr, SeqCst);
                 debug_assert_eq!(Debt::NONE, old);
                 local.offset.set(i + 1);
+                stat!(FAST_ACQUIRED);
                 return Some(&self.0[i]);
             }
         }
+        stat!(FAST_EXHAUSTED);
         None
     }
 }

@@ -19,15 +19,31 @@ maintenance = { status = "actively-developed" }
 weak = []
 # Some strategies used for testing few internal cornercases. *DO NOT USE* (no stability guarantees and their performance is likely very bad).
 internal-test-strategies = []
+# Internal test hooks: debt-path event counters and a tiny (1-entry) fast debt
+# slot pool, to deterministically force the fast path, slot exhaustion,
+# fallback and writer `pay_all` in tests. *DO NOT USE* ‒ no stability
+# guarantees, changes the memory layout of internal (private) structures and
+# slows things down. Off by default; a default build is bit-for-bit identical
+# to one without this feature existing.
+internal-test-hooks = []
 # Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
 experimental-strategies = []
 # Use the nightly "thread_local" feature, to allow no_std builds. No stability
 # guarantees with this feature.
+# On a stable compiler this currently falls back to the standard thread-local
+# storage (the no_std #[thread_local] attribute path needs a nightly
+# compiler), so the feature is a no-op there.
 experimental-thread-local = []
 
 [dependencies]
 rustversion = "1"
 serde = { version = "1", features = ["rc"], optional = true }
+# Loom is used only for the exhaustive interleaving tests (see tests/loom.rs
+# and TESTING.md). It is an optional *normal* dependency (not a
+# dev-dependency) because the library code switches its atomic types to the
+# loom-instrumented ones when compiled with `--cfg loom`. Without that cfg
+# (including a plain `--features loom` build) nothing in the crate uses it.
+loom = { version = "0.7", optional = true }
 
 [dev-dependencies]
 adaptive-barrier = "~1"

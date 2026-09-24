@@ -2,8 +2,17 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(deprecated)]
-#![cfg_attr(feature = "experimental-thread-local", no_std)]
-#![cfg_attr(feature = "experimental-thread-local", feature(thread_local))]
+// The no_std + #[thread_local] path is nightly-only. On a stable compiler the
+// experimental-thread-local feature degrades to the standard thread-local
+// storage (see build.rs and the feature description in Cargo.toml).
+#![cfg_attr(
+    all(feature = "experimental-thread-local", arc_swap_nightly_tls),
+    no_std
+)]
+#![cfg_attr(
+    all(feature = "experimental-thread-local", arc_swap_nightly_tls),
+    feature(thread_local)
+)]
 
 //! Making [`Arc`] itself atomic
 //!
@@ -139,6 +148,7 @@ extern crate alloc;
 
 pub mod access;
 mod as_raw;
+mod atomics;
 pub mod cache;
 mod compile_fail_tests;
 mod debt;
@@ -147,6 +157,8 @@ mod ref_cnt;
 #[cfg(feature = "serde")]
 mod serde;
 pub mod strategy;
+#[cfg(feature = "internal-test-hooks")]
+pub mod test_hooks;
 #[cfg(feature = "weak")]
 mod weak;
 
@@ -166,11 +178,10 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ops::Deref;
 use core::ptr;
-use core::sync::atomic::{AtomicPtr, Ordering};
-
 use crate::imports::Arc;
 
 use crate::access::{Access, Map};
+use crate::atomics::{AtomicPtr, Ordering};
 pub use crate::as_raw::AsRaw;
 pub use crate::cache::Cache;
 pub use crate::ref_cnt::RefCnt;

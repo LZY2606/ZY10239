@@ -29,18 +29,26 @@
 use core::cell::Cell;
 use core::ptr;
 use core::slice::Iter;
-use core::sync::atomic::Ordering::*;
-use core::sync::atomic::{AtomicPtr, AtomicUsize};
 
-#[cfg(feature = "experimental-thread-local")]
+#[cfg(all(feature = "experimental-thread-local", arc_swap_nightly_tls))]
 use core::cell::OnceCell;
 
+use crate::atomics::{AtomicPtr, AtomicUsize, Ordering::*};
 use crate::imports::Box;
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
 use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};
 use super::Debt;
 use crate::RefCnt;
+
+// The `nightly_tls` cfg below is a shorthand for the situations where the
+// nightly-only `#[thread_local]` attribute path of the
+// `experimental-thread-local` feature is active. On stable compilers (or
+// without the feature) the standard library thread locals are used. Under
+// `--cfg loom`, loom's instrumented thread local is used instead, so the
+// thread-exit/cooldown behaviour is explored by the loom models too (loom
+// runs the destructors of its mock thread locals when a mock thread
+// terminates, matching what the real runtime does).
 
 const NODE_UNUSED: usize = 0;
 const NODE_USED: usize = 1;

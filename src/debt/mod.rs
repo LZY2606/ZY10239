@@ -14,15 +14,45 @@
 //! Each node has some fast (but fallible) nodes and a fallback node, with different algorithms to
 //! claim them (see the relevant submodules).
 
-use core::sync::atomic::AtomicUsize;
-use core::sync::atomic::Ordering::*;
-
 pub(crate) use self::list::{LocalNode, Node};
 use super::RefCnt;
+use crate::atomics::{AtomicUsize, Ordering::*};
 
 mod fast;
 mod helping;
 mod list;
+
+/// Records one debt-related event for the test instrumentation.
+///
+/// This is a no-op unless the `internal-test-hooks` feature is enabled, in
+/// which case it bumps one of the counters in [`stats`]. The counters
+/// themselves live in plain statics, so enabling the feature doesn't change
+/// the layout of any structure and disabling it removes the code entirely.
+macro_rules! stat {
+    ($name:ident) => {
+        #[cfg(feature = "internal-test-hooks")]
+        $crate::debt::stats::$name.fetch_add(1, $crate::atomics::Ordering::Relaxed);
+    };
+}
+
+/// Test-only event counters, allowing tests to prove a specific code path
+/// (fast slot, slot exhaustion, fallback, writer help, writer pay_all) was
+/// actually taken. Only compiled with the `internal-test-hooks` feature.
+#[cfg(feature = "internal-test-hooks")]
+pub(crate) mod stats {
+    use core::sync::atomic::AtomicUsize;
+
+    /// A fast debt slot was successfully acquired for a load.
+    pub(crate) static FAST_ACQUIRED: AtomicUsize = AtomicUsize::new(0);
+    /// The fast slots were all occupied and the load had to fall back.
+    pub(crate) static FAST_EXHAUSTED: AtomicUsize = AtomicUsize::new(0);
+    /// The slow (helping) fallback path was taken by a load.
+    pub(crate) static FALLBACK_USED: AtomicUsize = AtomicUsize::new(0);
+    /// A writer helped out a reader with an in-progress fallback reservation.
+    pub(crate) static WRITER_HELPED: AtomicUsize = AtomicUsize::new(0);
+    /// A writer walked all the debt slots to pay the debts (`pay_all`).
+    pub(crate) static PAY_ALL: AtomicUsize = AtomicUsize::new(0);
+}
 
 /// One debt slot.
 ///
@@ -83,6 +113,7 @@ impl Debt {
         T: RefCnt,
         R: Fn() -> T,
     {
+        stat!(PAY_ALL);
         LocalNode::with(|local| {
             let val = unsafe { T::from_ptr(ptr) };
             // Pre-pay one ref count that can be safely put into a debt slot to pay it.
